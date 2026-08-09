@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Simulador de Balanço Hídrico do Solo - Canvas 2D</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; background: #0f172a; color: #fff; overflow: hidden; }
+
+    #ui-panel {
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      background: rgba(15, 23, 42, 0.88);
+      padding: 16px;
+      border-radius: 12px;
+      backdrop-filter: blur(8px);
+      z-index: 10;
+      width: 300px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+
+    #telemetry-panel {
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      background: rgba(15, 23, 42, 0.88);
+      padding: 16px;
+      border-radius: 12px;
+      backdrop-filter: blur(8px);
+      z-index: 10;
+      width: 280px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+
+    h2 { font-size: 1rem; color: #38bdf8; text-align: center; margin-bottom: 12px; }
+    .control-group { margin-bottom: 12px; }
+    label { font-size: 0.8rem; display: flex; justify-content: space-between; margin-bottom: 4px; color: #cbd5e1; }
+    input[type=range] { width: 100%; cursor: pointer; accent-color: #38bdf8; }
+
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      margin-bottom: 8px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .metric-value { font-weight: bold; color: #38bdf8; }
+
+    canvas { display: block; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+
+  <!-- Painel de Controles -->
+  <div id="ui-panel">
+    <h2>Forçantes Hidrológicas</h2>
+
+    <div class="control-group">
+      <label>Precipitação (P): <span id="p-val">20</span> mm/dia</label>
+      <input type="range" id="precip" min="0" max="100" value="20">
+    </div>
+
+    <div class="control-group">
+      <label>Evapotranspiração (ETP): <span id="etp-val">10</span> mm/dia</label>
+      <input type="range" id="etp" min="0" max="50" value="10">
+    </div>
+
+    <div class="control-group">
+      <label>Condutividade Hidráulica (K): <span id="k-val">Medio</span></label>
+      <input type="range" id="k-sat" min="1" max="3" value="2">
+    </div>
+  </div>
+
+  <!-- Painel de Telemetria do Solo -->
+  <div id="telemetry-panel">
+    <h2>Balanço Hídrico</h2>
+    <div class="metric-row">
+      <span>Umidade da Zona Raiz:</span>
+      <span id="soil-moist-val" class="metric-value">40%</span>
+    </div>
+    <div class="metric-row">
+      <span>Taxa de Infiltração:</span>
+      <span id="infil-val" class="metric-value">0 mm/h</span>
+    </div>
+    <div class="metric-row">
+      <span>Recarga do Aquífero:</span>
+      <span id="recharge-val" class="metric-value">0 mm/dia</span>
+    </div>
+    <div class="metric-row">
+      <span>Prof. Lençol Freático:</span>
+      <span id="water-table-val" class="metric-value">2.5 m</span>
+    </div>
+  </div>
+
+  <canvas id="soilCanvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById('soilCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Inputs
+    const precipInput = document.getElementById('precip');
+    const etpInput = document.getElementById('etp');
+    const kInput = document.getElementById('k-sat');
+
+    // Labels
+    const pVal = document.getElementById('p-val');
+    const etpVal = document.getElementById('etp-val');
+    const kVal = document.getElementById('k-val');
+    const soilMoistVal = document.getElementById('soil-moist-val');
+    const infilVal = document.getElementById('infil-val');
+    const rechargeVal = document.getElementById('recharge-val');
+    const waterTableVal = document.getElementById('water-table-val');
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // Estado Físico Interno
+    let soilMoisture = 30.0; // Umidade na zona não saturada (%) [0 a 100]
+    let waterTableHeight = 180; // Altura do Lençol Freático a partir da rocha em px
+    let waterTableDepthMeters = 2.5;
+
+    // Partículas de Água (Infiltração / Percolação)
+    class WaterDrop {
+      constructor() { this.reset(); }
+      reset() {
+        this.x = Math.random() * canvas.width;
+        this.y = 120 + Math.random() * 20; // Início no topo do solo
+        this.speed = Math.random() * 2 + 1;
+        this.active = true;
+      }
+      update(kSatFactor, maxDepth) {
+        this.y += this.speed * kSatFactor;
+        if (this.y >= maxDepth) {
+          this.active = false;
+        }
+      }
+      draw() {
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.7)';
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    const percolatingDrops = Array.from({ length: 300 }, () => new WaterDrop());
+
+    function animate() {
+      const P = parseFloat(precipInput.value);
+      const ETP = parseFloat(etpInput.value);
+      const K = parseInt(kInput.value); // 1 = Argiloso, 2 = Franco, 3 = Arenoso
+
+      pVal.textContent = P;
+      etpVal.textContent = ETP;
+      kVal.textContent = K === 1 ? 'Lento (Argila)' : (K === 2 ? 'Médio (Franco)' : 'Rápido (Areia)');
+
+      // --- Equações do Balanço Hídrico ---
+      
+      // Condutividade hidráulica ajustada
+      const kFactor = K * 0.8;
+
+      // 1. Variação da umidade do solo (Zona Raiz / Vadosa)
+      const netSurfaceInput = P - ETP;
+      soilMoisture += netSurfaceInput * 0.01 * (4 - K);
+      soilMoisture = Math.max(5, Math.min(100, soilMoisture));
+
+      // 2. Recarga Profunda (Ocorre quando a umidade ultrapassa a Capacidade de Campo ~50%)
+      let rechargeRate = 0;
+      if (soilMoisture > 45) {
+        rechargeRate = (soilMoisture - 45) * 0.05 * kFactor;
+        soilMoisture -= rechargeRate * 0.1; // Drenagem por gravidade
+      }
+
+      // 3. Flutuação do Lençol Freático (Aquífero)
+      // Recarga eleva o nível; Descarga do aquífero/vazão de base reduz suavemente
+      waterTableHeight += rechargeRate * 0.15 - 0.05;
+      waterTableHeight = Math.max(40, Math.min(canvas.height - 250, waterTableHeight));
+
+      // Mapeamento para profundidade em metros
+      waterTableDepthMeters = Math.max(0.2, (canvas.height - 180 - waterTableHeight) / 80);
+
+      // --- Atualização dos Indicadores da Interface ---
+      soilMoistVal.textContent = `${soilMoisture.toFixed(1)}%`;
+      infilVal.textContent = `${(P * (soilMoisture < 90 ? 0.9 : 0.2)).toFixed(1)} mm/h`;
+      rechargeVal.textContent = `${rechargeRate.toFixed(2)} mm/dia`;
+      waterTableVal.textContent = `${waterTableDepthMeters.toFixed(2)} m`;
+
+      // --- RENDERIZAÇÃO NO CANVAS ---
+
+      // A. Céu / Atmosfera
+      ctx.fillStyle = P > 40 ? '#334155' : '#0f172a';
+      ctx.fillRect(0, 0, canvas.width, 140);
+
+      // Chuva caindo
+      if (P > 0) {
+        ctx.strokeStyle = 'rgba(186, 230, 253, 0.5)';
+        ctx.lineWidth = 1;
+        const activeRain = Math.floor((P / 100) * 150);
+        for (let i = 0; i < activeRain; i++) {
+          const rx = (Math.sin(i * 99) * 0.5 + 0.5) * canvas.width;
+          const ry = (Math.cos(i * 33) * 0.5 + 0.5) * 120;
+          ctx.beginPath();
+          ctx.moveTo(rx, ry);
+          ctx.lineTo(rx - 2, ry + 12);
+          ctx.stroke();
+        }
+      }
+
+      // B. Perfil Transversal do Solo (Geologia/Pedologia)
+      const surfaceY = 140;
+      const bedRockY = canvas.height - 50;
+      const currentWaterTableY = bedRockY - waterTableHeight;
+
+      // 1. Zona Não Saturada / Vadosa (Tons de marrom variando com a umidade)
+      // Úmido = Marrom escuro | Seco = Marrom avermelhado/amarelado
+      const rSoil = Math.round(180 - (soilMoisture * 1.1));
+      const gSoil = Math.round(120 - (soilMoisture * 0.7));
+      const bSoil = Math.round(70 - (soilMoisture * 0.4));
+      ctx.fillStyle = `rgb(${rSoil}, ${gSoil}, ${bSoil})`;
+      ctx.fillRect(0, surfaceY, canvas.width, currentWaterTableY - surfaceY);
+
+      // 2. Zona Saturada (Aquífero)
+      ctx.fillStyle = '#0284c7';
+      ctx.fillRect(0, currentWaterTableY, canvas.width, bedRockY - currentWaterTableY);
+
+      // 3. Rocha Impermeável / Embasamento Cristalino
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(0, bedRockY, canvas.width, canvas.height - bedRockY);
+      ctx.fillStyle = '#64748b';
+      ctx.font = '12px Arial';
+      ctx.fillText('Embasamento Rochoso Impermeável', 20, bedRockY + 30);
+
+      // C. Desenho das Partículas de Percolation (Água em Movimento na Vadosa)
+      const maxWaterDepth = currentWaterTableY;
+      percolatingDrops.forEach(drop => {
+        if (!drop.active || drop.y >= maxWaterDepth) drop.reset();
+        if (soilMoisture > 30 || P > 0) {
+          drop.update(kFactor, maxWaterDepth);
+          drop.draw();
+        }
+      });
+
+      // D. Linhas e Rótulos das Camadas
+      // Nível do Lençol Freático (Linha de Franja Capilar)
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 5]);
+      ctx.beginPath();
+      ctx.moveTo(0, currentWaterTableY);
+      ctx.lineTo(canvas.width, currentWaterTableY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = '#e0f2fe';
+      ctx.font = 'bold 13px Arial';
+      ctx.fillText('▼ Nível Freático (Superfície Potenciométrica)', 30, currentWaterTableY - 10);
+      
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+      ctx.fillText('Zona Vadosa / Não Saturada (Ar + Água)', 30, surfaceY + 50);
+      ctx.fillText('Zona Saturada / Aquífero Livre (100% Poros com Água)', 30, currentWaterTableY + 40);
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+  </script>
+</body>
+</html>
