@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <title>Simulador de Balanço Hídrico do Solo - Canvas 2D</title>
+  <title>Simulador Hidrogeológico - Interação Rio-Aquífero</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: Arial, sans-serif; background: #0f172a; color: #fff; overflow: hidden; }
@@ -11,12 +11,12 @@
       position: absolute;
       top: 15px;
       left: 15px;
-      background: rgba(15, 23, 42, 0.88);
+      background: rgba(15, 23, 42, 0.9);
       padding: 16px;
       border-radius: 12px;
       backdrop-filter: blur(8px);
       z-index: 10;
-      width: 300px;
+      width: 310px;
       border: 1px solid rgba(255, 255, 255, 0.1);
       box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     }
@@ -25,17 +25,17 @@
       position: absolute;
       top: 15px;
       right: 15px;
-      background: rgba(15, 23, 42, 0.88);
+      background: rgba(15, 23, 42, 0.9);
       padding: 16px;
       border-radius: 12px;
       backdrop-filter: blur(8px);
       z-index: 10;
-      width: 280px;
+      width: 290px;
       border: 1px solid rgba(255, 255, 255, 0.1);
       box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     }
 
-    h2 { font-size: 1rem; color: #38bdf8; text-align: center; margin-bottom: 12px; }
+    h2 { font-size: 0.95rem; color: #38bdf8; text-align: center; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
     .control-group { margin-bottom: 12px; }
     label { font-size: 0.8rem; display: flex; justify-content: space-between; margin-bottom: 4px; color: #cbd5e1; }
     input[type=range] { width: 100%; cursor: pointer; accent-color: #38bdf8; }
@@ -43,12 +43,22 @@
     .metric-row {
       display: flex;
       justify-content: space-between;
-      font-size: 0.85rem;
+      font-size: 0.82rem;
       margin-bottom: 8px;
       padding-bottom: 4px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     }
     .metric-value { font-weight: bold; color: #38bdf8; }
+    .status-badge {
+      text-align: center;
+      padding: 6px;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 0.85rem;
+      margin-top: 8px;
+    }
+    .efluente { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981; }
+    .influente { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #f59e0b; }
 
     canvas { display: block; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; }
   </style>
@@ -70,21 +80,22 @@
     </div>
 
     <div class="control-group">
-      <label>Condutividade Hidráulica (K): <span id="k-val">Medio</span></label>
+      <label>Condutividade Hidráulica (K): <span id="k-val">Médio</span></label>
       <input type="range" id="k-sat" min="1" max="3" value="2">
+    </div>
+
+    <div class="control-group">
+      <label>Nível da Cota do Rio: <span id="river-stage-val">Média</span></label>
+      <input type="range" id="river-stage" min="100" max="250" value="180">
     </div>
   </div>
 
-  <!-- Painel de Telemetria do Solo -->
+  <!-- Painel de Telemetria -->
   <div id="telemetry-panel">
-    <h2>Balanço Hídrico</h2>
+    <h2>Interação Rio-Aquífero</h2>
     <div class="metric-row">
-      <span>Umidade da Zona Raiz:</span>
+      <span>Umidade Zona Vadosa:</span>
       <span id="soil-moist-val" class="metric-value">40%</span>
-    </div>
-    <div class="metric-row">
-      <span>Taxa de Infiltração:</span>
-      <span id="infil-val" class="metric-value">0 mm/h</span>
     </div>
     <div class="metric-row">
       <span>Recarga do Aquífero:</span>
@@ -94,6 +105,12 @@
       <span>Prof. Lençol Freático:</span>
       <span id="water-table-val" class="metric-value">2.5 m</span>
     </div>
+    <div class="metric-row">
+      <span>Gradiente Hidráulico:</span>
+      <span id="gradient-val" class="metric-value">0.00</span>
+    </div>
+
+    <div id="river-status" class="status-badge efluente">RIO EFLUENTE (Ganhador)</div>
   </div>
 
   <canvas id="soilCanvas"></canvas>
@@ -106,15 +123,18 @@
     const precipInput = document.getElementById('precip');
     const etpInput = document.getElementById('etp');
     const kInput = document.getElementById('k-sat');
+    const riverStageInput = document.getElementById('river-stage');
 
-    // Labels
+    // Elementos de Interface
     const pVal = document.getElementById('p-val');
     const etpVal = document.getElementById('etp-val');
     const kVal = document.getElementById('k-val');
+    const riverStageVal = document.getElementById('river-stage-val');
     const soilMoistVal = document.getElementById('soil-moist-val');
-    const infilVal = document.getElementById('infil-val');
     const rechargeVal = document.getElementById('recharge-val');
     const waterTableVal = document.getElementById('water-table-val');
+    const gradientVal = document.getElementById('gradient-val');
+    const riverStatus = document.getElementById('river-status');
 
     function resizeCanvas() {
       canvas.width = window.innerWidth;
@@ -124,24 +144,22 @@
     window.addEventListener('resize', resizeCanvas);
 
     // Estado Físico Interno
-    let soilMoisture = 30.0; // Umidade na zona não saturada (%) [0 a 100]
-    let waterTableHeight = 180; // Altura do Lençol Freático a partir da rocha em px
-    let waterTableDepthMeters = 2.5;
+    let soilMoisture = 35.0; 
+    let waterTableHeight = 190; // Altura do nível freático em px acima da rocha
+    let arrowOffset = 0; // Para animação dos vetores de fluxo
 
-    // Partículas de Água (Infiltração / Percolação)
+    // Partículas de Percolação
     class WaterDrop {
       constructor() { this.reset(); }
       reset() {
         this.x = Math.random() * canvas.width;
-        this.y = 120 + Math.random() * 20; // Início no topo do solo
+        this.y = 140 + Math.random() * 20;
         this.speed = Math.random() * 2 + 1;
         this.active = true;
       }
       update(kSatFactor, maxDepth) {
         this.y += this.speed * kSatFactor;
-        if (this.y >= maxDepth) {
-          this.active = false;
-        }
+        if (this.y >= maxDepth) this.active = false;
       }
       draw() {
         ctx.fillStyle = 'rgba(56, 189, 248, 0.7)';
@@ -151,121 +169,201 @@
       }
     }
 
-    const percolatingDrops = Array.from({ length: 300 }, () => new WaterDrop());
+    const percolatingDrops = Array.from({ length: 250 }, () => new WaterDrop());
+
+    // Desenha setas indicativas de direção de fluxo
+    function drawArrow(fromX, fromY, toX, toY, color) {
+      const headLength = 8;
+      const angle = Math.atan2(toY - fromY, toX - fromX);
+
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 2;
+
+      ctx.beginPath();
+      ctx.moveTo(fromX, fromY);
+      ctx.lineTo(toX, toY);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(toX, toY);
+      ctx.lineTo(toX - headLength * Math.cos(angle - Math.PI / 6), toY - headLength * Math.sin(angle - Math.PI / 6));
+      ctx.lineTo(toX - headLength * Math.cos(angle + Math.PI / 6), toY - headLength * Math.sin(angle + Math.PI / 6));
+      ctx.closePath();
+      ctx.fill();
+    }
 
     function animate() {
       const P = parseFloat(precipInput.value);
       const ETP = parseFloat(etpInput.value);
-      const K = parseInt(kInput.value); // 1 = Argiloso, 2 = Franco, 3 = Arenoso
+      const K = parseInt(kInput.value);
+      const riverStagePx = parseFloat(riverStageInput.value);
 
+      // Atualização dos rótulos simples
       pVal.textContent = P;
       etpVal.textContent = ETP;
       kVal.textContent = K === 1 ? 'Lento (Argila)' : (K === 2 ? 'Médio (Franco)' : 'Rápido (Areia)');
-
-      // --- Equações do Balanço Hídrico ---
       
-      // Condutividade hidráulica ajustada
-      const kFactor = K * 0.8;
+      const stagePct = ((riverStagePx - 100) / 150) * 100;
+      riverStageVal.textContent = stagePct < 33 ? 'Baixa' : (stagePct < 66 ? 'Média' : 'Alta');
 
-      // 1. Variação da umidade do solo (Zona Raiz / Vadosa)
+      // Equações do Balanço Hídrico Simplificado
+      const kFactor = K * 0.8;
       const netSurfaceInput = P - ETP;
-      soilMoisture += netSurfaceInput * 0.01 * (4 - K);
+      soilMoisture += netSurfaceInput * 0.008 * (4 - K);
       soilMoisture = Math.max(5, Math.min(100, soilMoisture));
 
-      // 2. Recarga Profunda (Ocorre quando a umidade ultrapassa a Capacidade de Campo ~50%)
       let rechargeRate = 0;
-      if (soilMoisture > 45) {
-        rechargeRate = (soilMoisture - 45) * 0.05 * kFactor;
-        soilMoisture -= rechargeRate * 0.1; // Drenagem por gravidade
+      if (soilMoisture > 40) {
+        rechargeRate = (soilMoisture - 40) * 0.04 * kFactor;
+        soilMoisture -= rechargeRate * 0.08;
       }
 
-      // 3. Flutuação do Lençol Freático (Aquífero)
-      // Recarga eleva o nível; Descarga do aquífero/vazão de base reduz suavemente
-      waterTableHeight += rechargeRate * 0.15 - 0.05;
-      waterTableHeight = Math.max(40, Math.min(canvas.height - 250, waterTableHeight));
+      // Dinâmica do Nível Freático
+      waterTableHeight += rechargeRate * 0.12 - 0.03;
+      waterTableHeight = Math.max(50, Math.min(canvas.height - 220, waterTableHeight));
 
-      // Mapeamento para profundidade em metros
-      waterTableDepthMeters = Math.max(0.2, (canvas.height - 180 - waterTableHeight) / 80);
+      const waterTableDepthMeters = Math.max(0.2, (canvas.height - 140 - waterTableHeight) / 70);
 
-      // --- Atualização dos Indicadores da Interface ---
+      // Definições de Geometria da Renderização
+      const surfaceY = 140;
+      const bedRockY = canvas.height - 50;
+      const currentWaterTableY = bedRockY - waterTableHeight;
+      const riverBedY = bedRockY - 120; // Fundo do rio fixo
+      const riverWaterY = bedRockY - riverStagePx; // Nível d'água no rio
+      const riverCenterX = canvas.width / 2;
+      const riverWidth = 160;
+
+      // Cálculo da diferença de Carga Hidráulica (Aquífero vs Rio)
+      const headDifference = currentWaterTableY - riverWaterY; // < 0 significa Freático acima do Rio
+
+      // Atualiza Telemetria
       soilMoistVal.textContent = `${soilMoisture.toFixed(1)}%`;
-      infilVal.textContent = `${(P * (soilMoisture < 90 ? 0.9 : 0.2)).toFixed(1)} mm/h`;
       rechargeVal.textContent = `${rechargeRate.toFixed(2)} mm/dia`;
       waterTableVal.textContent = `${waterTableDepthMeters.toFixed(2)} m`;
+      gradientVal.textContent = `${(Math.abs(headDifference) / 1000).toFixed(3)} m/m`;
+
+      // Atualiza o estado visual da relação Rio-Aquífero
+      const isEfluente = headDifference < 0;
+      if (isEfluente) {
+        riverStatus.textContent = "RIO EFLUENTE (Ganhador)";
+        riverStatus.className = "status-badge efluente";
+      } else {
+        riverStatus.textContent = "RIO INFLUENTE (Perdedor)";
+        riverStatus.className = "status-badge influente";
+      }
 
       // --- RENDERIZAÇÃO NO CANVAS ---
 
-      // A. Céu / Atmosfera
-      ctx.fillStyle = P > 40 ? '#334155' : '#0f172a';
-      ctx.fillRect(0, 0, canvas.width, 140);
+      // 1. Atmosfera
+      ctx.fillStyle = P > 40 ? '#1e293b' : '#0f172a';
+      ctx.fillRect(0, 0, canvas.width, surfaceY);
 
-      // Chuva caindo
+      // Chuva
       if (P > 0) {
-        ctx.strokeStyle = 'rgba(186, 230, 253, 0.5)';
+        ctx.strokeStyle = 'rgba(186, 230, 253, 0.4)';
         ctx.lineWidth = 1;
-        const activeRain = Math.floor((P / 100) * 150);
+        const activeRain = Math.floor((P / 100) * 120);
         for (let i = 0; i < activeRain; i++) {
           const rx = (Math.sin(i * 99) * 0.5 + 0.5) * canvas.width;
-          const ry = (Math.cos(i * 33) * 0.5 + 0.5) * 120;
+          const ry = (Math.cos(i * 33) * 0.5 + 0.5) * surfaceY;
           ctx.beginPath();
           ctx.moveTo(rx, ry);
-          ctx.lineTo(rx - 2, ry + 12);
+          ctx.lineTo(rx - 2, ry + 10);
           ctx.stroke();
         }
       }
 
-      // B. Perfil Transversal do Solo (Geologia/Pedologia)
-      const surfaceY = 140;
-      const bedRockY = canvas.height - 50;
-      const currentWaterTableY = bedRockY - waterTableHeight;
-
-      // 1. Zona Não Saturada / Vadosa (Tons de marrom variando com a umidade)
-      // Úmido = Marrom escuro | Seco = Marrom avermelhado/amarelado
+      // 2. Perfis de Solo (Esquerda e Direita com Caimento em direçao ao Rio)
       const rSoil = Math.round(180 - (soilMoisture * 1.1));
       const gSoil = Math.round(120 - (soilMoisture * 0.7));
       const bSoil = Math.round(70 - (soilMoisture * 0.4));
+      
+      // Desenho do terreno com relevo da calha do rio no centro
       ctx.fillStyle = `rgb(${rSoil}, ${gSoil}, ${bSoil})`;
-      ctx.fillRect(0, surfaceY, canvas.width, currentWaterTableY - surfaceY);
+      ctx.beginPath();
+      ctx.moveTo(0, surfaceY);
+      ctx.lineTo(riverCenterX - riverWidth, surfaceY);
+      ctx.quadraticCurveTo(riverCenterX - riverWidth / 2, riverBedY, riverCenterX, riverBedY);
+      ctx.quadraticCurveTo(riverCenterX + riverWidth / 2, riverBedY, riverCenterX + riverWidth, surfaceY);
+      ctx.lineTo(canvas.width, surfaceY);
+      ctx.lineTo(canvas.width, bedRockY);
+      ctx.lineTo(0, bedRockY);
+      ctx.closePath();
+      ctx.fill();
 
-      // 2. Zona Saturada (Aquífero)
+      // 3. Zona Saturada (Aquífero)
       ctx.fillStyle = '#0284c7';
-      ctx.fillRect(0, currentWaterTableY, canvas.width, bedRockY - currentWaterTableY);
+      ctx.beginPath();
+      ctx.moveTo(0, currentWaterTableY);
+      
+      // Curva do lençol freático em direção ao rio
+      ctx.quadraticCurveTo(riverCenterX / 2, currentWaterTableY, riverCenterX, isEfluente ? riverWaterY : currentWaterTableY);
+      ctx.quadraticCurveTo(riverCenterX * 1.5, currentWaterTableY, canvas.width, currentWaterTableY);
+      ctx.lineTo(canvas.width, bedRockY);
+      ctx.lineTo(0, bedRockY);
+      ctx.closePath();
+      ctx.fill();
 
-      // 3. Rocha Impermeável / Embasamento Cristalino
+      // 4. Água do Rio
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.85)';
+      ctx.beginPath();
+      ctx.moveTo(riverCenterX - riverWidth / 1.5, riverWaterY);
+      ctx.quadraticCurveTo(riverCenterX, riverWaterY + 5, riverCenterX + riverWidth / 1.5, riverWaterY);
+      ctx.lineTo(riverCenterX + riverWidth / 2, riverBedY);
+      ctx.quadraticCurveTo(riverCenterX, riverBedY + 10, riverCenterX - riverWidth / 2, riverBedY);
+      ctx.closePath();
+      ctx.fill();
+
+      // 5. Rocha Impermeável
       ctx.fillStyle = '#1e293b';
       ctx.fillRect(0, bedRockY, canvas.width, canvas.height - bedRockY);
       ctx.fillStyle = '#64748b';
       ctx.font = '12px Arial';
       ctx.fillText('Embasamento Rochoso Impermeável', 20, bedRockY + 30);
 
-      // C. Desenho das Partículas de Percolation (Água em Movimento na Vadosa)
-      const maxWaterDepth = currentWaterTableY;
+      // Partículas de Infiltração na Zona Vadosa
       percolatingDrops.forEach(drop => {
-        if (!drop.active || drop.y >= maxWaterDepth) drop.reset();
-        if (soilMoisture > 30 || P > 0) {
-          drop.update(kFactor, maxWaterDepth);
-          drop.draw();
+        // Evita desenhar partículas dentro do rio
+        if (Math.abs(drop.x - riverCenterX) > riverWidth / 2) {
+          if (!drop.active || drop.y >= currentWaterTableY) drop.reset();
+          if (soilMoisture > 30 || P > 0) {
+            drop.update(kFactor, currentWaterTableY);
+            drop.draw();
+          }
         }
       });
 
-      // D. Linhas e Rótulos das Camadas
-      // Nível do Lençol Freático (Linha de Franja Capilar)
+      // 6. Linha do Lençol Freático (Superfície Potenciométrica)
       ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 3;
-      ctx.setLineDash([10, 5]);
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([8, 4]);
       ctx.beginPath();
       ctx.moveTo(0, currentWaterTableY);
-      ctx.lineTo(canvas.width, currentWaterTableY);
+      ctx.quadraticCurveTo(riverCenterX / 2, currentWaterTableY, riverCenterX, isEfluente ? riverWaterY : currentWaterTableY);
+      ctx.quadraticCurveTo(riverCenterX * 1.5, currentWaterTableY, canvas.width, currentWaterTableY);
       ctx.stroke();
       ctx.setLineDash([]);
 
+      // 7. Vetores de Fluxo Dinâmicos (Setas do Gradiente Hidráulico)
+      arrowOffset = (arrowOffset + 0.5) % 20;
+      const arrowColor = isEfluente ? '#34d399' : '#fbbf24';
+
+      if (isEfluente) {
+        // Fluxo do Aquífero -> Rio
+        drawArrow(riverCenterX - 120 + arrowOffset, currentWaterTableY + 20, riverCenterX - 40 + arrowOffset, riverWaterY + 10, arrowColor);
+        drawArrow(riverCenterX + 120 - arrowOffset, currentWaterTableY + 20, riverCenterX + 40 - arrowOffset, riverWaterY + 10, arrowColor);
+      } else {
+        // Fluxo do Rio -> Aquífero
+        drawArrow(riverCenterX - 30 - arrowOffset, riverWaterY + 15, riverCenterX - 100 - arrowOffset, currentWaterTableY + 30, arrowColor);
+        drawArrow(riverCenterX + 30 + arrowOffset, riverWaterY + 15, riverCenterX + 100 + arrowOffset, currentWaterTableY + 30, arrowColor);
+      }
+
+      // Legendas no Canvas
       ctx.fillStyle = '#e0f2fe';
-      ctx.font = 'bold 13px Arial';
-      ctx.fillText('▼ Nível Freático (Superfície Potenciométrica)', 30, currentWaterTableY - 10);
-      
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-      ctx.fillText('Zona Vadosa / Não Saturada (Ar + Água)', 30, surfaceY + 50);
-      ctx.fillText('Zona Saturada / Aquífero Livre (100% Poros com Água)', 30, currentWaterTableY + 40);
+      ctx.font = 'bold 12px Arial';
+      ctx.fillText('▼ Nível Freático', 20, currentWaterTableY - 10);
+      ctx.fillText('Calha do Rio', riverCenterX - 35, riverBedY - 10);
 
       requestAnimationFrame(animate);
     }
