@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <title>Simulador Hidrogeológico 3D - Com N.A. Dinâmico</title>
+  <title>Simulador Hidrogeológico 3D - Limite N.A. e Novas Cores</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', Arial, sans-serif; background: #0b1120; color: #fff; overflow: hidden; }
@@ -37,8 +37,8 @@
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
-    .efluente { background: rgba(16, 185, 129, 0.25); color: #34d399; border: 1px solid #10b981; box-shadow: 0 0 12px rgba(16, 185, 129, 0.3); }
-    .influente { background: rgba(245, 158, 11, 0.25); color: #fbbf24; border: 1px solid #f59e0b; box-shadow: 0 0 12px rgba(245, 158, 11, 0.3); }
+    .efluente { background: rgba(95, 0, 179, 0.25); color: #c084fc; border: 1px solid #5f00b3; box-shadow: 0 0 12px rgba(95, 0, 179, 0.3); }
+    .influente { background: rgba(179, 119, 0, 0.25); color: #fbbf24; border: 1px solid #b37700; box-shadow: 0 0 12px rgba(179, 119, 0, 0.3); }
 
     #canvas-container { width: 100vw; height: 100vh; }
     .instructions {
@@ -67,8 +67,8 @@
     <div class="control-group">
       <label>Regime Hidrológico:</label>
       <select id="regime-select">
-        <option value="efluente">Rio Efluente (Clima Úmido / Ganhador)</option>
-        <option value="influente">Rio Influente (Clima Árido / Perdedor)</option>
+        <option value="efluente">Rio Efluente (Clima Úmido / Árvores)</option>
+        <option value="influente">Rio Influente (Clima Árido / Caatinga)</option>
       </select>
     </div>
 
@@ -106,20 +106,52 @@
     controls.enableDamping = true;
 
     // --- ILUMINAÇÃO ---
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
     scene.add(ambientLight);
 
-    const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+    const sun = new THREE.DirectionalLight(0xffffff, 1.2);
     sun.position.set(25, 40, 20);
     scene.add(sun);
+
+    // --- TEXTURA PROCEDURAL ÁRIDA ---
+    function createAridTexture() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d');
+
+      ctx.fillStyle = '#b57a44';
+      ctx.fillRect(0, 0, 256, 256);
+
+      for (let i = 0; i < 6000; i++) {
+        const x = Math.random() * 256;
+        const y = Math.random() * 256;
+        const size = Math.random() * 2 + 1;
+        ctx.fillStyle = Math.random() > 0.5 ? '#8b5a2b' : '#d2b48c';
+        ctx.fillRect(x, y, size, size);
+      }
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(4, 2);
+      return texture;
+    }
+
+    const aridTexture = createAridTexture();
 
     // --- BLOCO 3D DO TERRENO ---
     const blockWidth = 20;
     const blockDepth = 12;
     const blockHeight = 8;
-    const frontZ = blockDepth / 2 + 0.08; // Posição frontal para os elementos do corte
+    const frontZ = blockDepth / 2 + 0.08;
 
-    // 1. Solo com Calha
+    // Função de cálculo de cota de superfície do terreno
+    function getTerrainHeight(x) {
+      return blockHeight - Math.exp(-Math.pow(x / 4.0, 2)) * 2.8;
+    }
+
+    // 1. Solo
     const soilGeo = new THREE.BoxGeometry(blockWidth, blockHeight, blockDepth, 60, 1, 1);
     const pos = soilGeo.attributes.position;
 
@@ -127,52 +159,131 @@
       let x = pos.getX(i);
       let y = pos.getY(i);
       if (y > 0) {
-        let valley = Math.exp(-Math.pow(x / 3.0, 2)) * 3.0;
+        let valley = Math.exp(-Math.pow(x / 4.0, 2)) * 2.8;
         pos.setY(i, y - valley);
       }
     }
     soilGeo.computeVertexNormals();
 
-    const soilMat = new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.8 });
+    const soilMat = new THREE.MeshStandardMaterial({ color: 0x3a5a40, roughness: 0.8 });
     const soilMesh = new THREE.Mesh(soilGeo, soilMat);
     soilMesh.position.y = blockHeight / 2;
     scene.add(soilMesh);
 
-    // 2. Rocha Impermeável
+    // 2. Depósito Aluvial
+    const alluviumGeo = new THREE.BoxGeometry(6.5, 0.2, blockDepth + 0.02);
+    const alluviumMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.9 });
+    const alluviumMesh = new THREE.Mesh(alluviumGeo, alluviumMat);
+    alluviumMesh.position.set(0, 5.21, 0);
+    scene.add(alluviumMesh);
+
+    // 3. Rocha Impermeável
     const rockGeo = new THREE.BoxGeometry(blockWidth, 1.2, blockDepth);
     const rockMat = new THREE.MeshStandardMaterial({ color: 0x334155 });
     const rockMesh = new THREE.Mesh(rockGeo, rockMat);
     rockMesh.position.y = 0.6;
     scene.add(rockMesh);
 
-    // 3. MESH DO AQUÍFERO (Água Subterrânea)
-    const waterGeo = new THREE.BoxGeometry(blockWidth - 0.05, 1, blockDepth - 0.05);
-    const waterMat = new THREE.MeshPhysicalMaterial({
-      color: 0x0284c7,
+    // 4. MESH DO AQUÍFERO
+    const waterGeo = new THREE.BoxGeometry(blockWidth - 0.02, 1, blockDepth + 0.1);
+    const waterMat = new THREE.MeshStandardMaterial({
+      color: 0x00a8ff,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.65,
       roughness: 0.1
     });
     const waterMesh = new THREE.Mesh(waterGeo, waterMat);
     waterMesh.position.set(0, 4, 0);
     scene.add(waterMesh);
 
-    // 4. ÁGUA DO RIO
-    const riverGeo = new THREE.BoxGeometry(3.5, 0.4, blockDepth + 0.1);
-    const riverMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.2 });
+    // 5. ÁGUA DO RIO
+    const riverGeo = new THREE.BoxGeometry(1, 0.3, blockDepth + 0.2);
+    const riverMat = new THREE.MeshStandardMaterial({ color: 0x00d2ff, roughness: 0.1 });
     const riverMesh = new THREE.Mesh(riverGeo, riverMat);
-    riverMesh.position.set(0, 5.2, 0);
+    riverMesh.position.set(0, 5.3, 0);
     scene.add(riverMesh);
 
-    // --- LINHA DINÂMICA DO NÍVEL FREÁTICO (N.A.) ---
+    // --- CONSTRUTORES DE VEGETAÇÃO 3D ---
+    const vegetationGroup = new THREE.Group();
+    scene.add(vegetationGroup);
+
+    function createCactus() {
+      const group = new THREE.Group();
+      const mat = new THREE.MeshStandardMaterial({ color: 0x2e5a1c, roughness: 0.6 });
+
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 1.2, 8), mat);
+      trunk.position.y = 0.6;
+      group.add(trunk);
+
+      const arm1 = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.5, 8), mat);
+      arm1.position.set(-0.15, 0.6, 0);
+      arm1.rotation.z = Math.PI / 2;
+      group.add(arm1);
+
+      const arm1Up = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.4, 8), mat);
+      arm1Up.position.set(-0.3, 0.75, 0);
+      group.add(arm1Up);
+
+      const arm2 = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.4, 8), mat);
+      arm2.position.set(0.12, 0.4, 0);
+      arm2.rotation.z = -Math.PI / 2;
+      group.add(arm2);
+
+      const arm2Up = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.3, 8), mat);
+      arm2Up.position.set(0.24, 0.5, 0);
+      group.add(arm2Up);
+
+      const scale = 0.8 + Math.random() * 0.5;
+      group.scale.set(scale, scale, scale);
+      return group;
+    }
+
+    function createTree() {
+      const group = new THREE.Group();
+      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.9 });
+      const leavesMat = new THREE.MeshStandardMaterial({ color: 0x2d6a4f, roughness: 0.5 });
+
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.15, 1.0, 8), trunkMat);
+      trunk.position.y = 0.5;
+      group.add(trunk);
+
+      const leaves = new THREE.Mesh(new THREE.DodecahedronGeometry(0.65, 1), leavesMat);
+      leaves.position.y = 1.1;
+      group.add(leaves);
+
+      const scale = 0.8 + Math.random() * 0.6;
+      group.scale.set(scale, scale, scale);
+      return group;
+    }
+
+    function populateVegetation(type) {
+      while (vegetationGroup.children.length > 0) {
+        vegetationGroup.remove(vegetationGroup.children[0]);
+      }
+
+      const positions = [
+        { x: -8.5, z: -3 }, { x: -7.0, z: 2 }, { x: -5.5, z: -4 }, { x: -4.5, z: 3 },
+        { x: 4.5, z: -2 }, { x: 5.5, z: 4 }, { x: 7.2, z: -3 }, { x: 8.5, z: 1 }
+      ];
+
+      positions.forEach(p => {
+        const item = (type === 'cactus') ? createCactus() : createTree();
+        const yHeight = getTerrainHeight(p.x);
+        item.position.set(p.x, yHeight, p.z);
+        item.rotation.y = Math.random() * Math.PI * 2;
+        vegetationGroup.add(item);
+      });
+    }
+
+    // --- LINHA DINÂMICA DO N.A. ---
     const linePointsCount = 50;
     const lineGeo = new THREE.BufferGeometry();
     const linePositions = new Float32Array(linePointsCount * 3);
     lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
 
     const lineMat = new THREE.LineDashedMaterial({
-      color: 0x38bdf8,
-      linewidth: 3,
+      color: 0x00ffff,
+      linewidth: 4,
       scale: 1,
       dashSize: 0.4,
       gapSize: 0.2
@@ -180,33 +291,60 @@
     const naLine = new THREE.Line(lineGeo, lineMat);
     scene.add(naLine);
 
-    // --- CHUVA (PARTÍCULAS) ---
-    const rainCount = 400;
+    // --- CHUVA ---
+    const rainCount = 600;
     const rainGeo = new THREE.BufferGeometry();
     const rainPositions = new Float32Array(rainCount * 3);
 
     for (let i = 0; i < rainCount * 3; i += 3) {
       rainPositions[i] = (Math.random() - 0.5) * blockWidth;
-      rainPositions[i + 1] = 8 + Math.random() * 12;
+      rainPositions[i + 1] = 6 + Math.random() * 10;
       rainPositions[i + 2] = (Math.random() - 0.5) * blockDepth;
     }
 
     rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPositions, 3));
-    const rainMat = new THREE.PointsMaterial({ color: 0x7dd3fc, size: 0.2, transparent: true, opacity: 0.8 });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 16; canvas.height = 16;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(8,8,0, 8,8,8);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(1, 'rgba(56,189,248,0)');
+    ctx.fillStyle = grad; ctx.fillRect(0,0,16,16);
+    const dropTexture = new THREE.CanvasTexture(canvas);
+
+    const rainMat = new THREE.PointsMaterial({
+      color: 0x38bdf8,
+      size: 0.45,
+      map: dropTexture,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
     const rainSystem = new THREE.Points(rainGeo, rainMat);
     scene.add(rainSystem);
 
-    // --- SETAS DINÂMICAS DE FLUXO ---
+    // --- SETAS FLUXO SUBTERRÂNEO ---
     const arrowGroup = new THREE.Group();
     scene.add(arrowGroup);
     const arrowData = [];
+
+    // --- SETAS RECARGA VERTICAL ---
+    const rechargeGroup = new THREE.Group();
+    scene.add(rechargeGroup);
+    const rechargeData = [];
 
     function buildArrows() {
       while (arrowGroup.children.length > 0) arrowGroup.remove(arrowGroup.children[0]);
       arrowData.length = 0;
 
+      while (rechargeGroup.children.length > 0) rechargeGroup.remove(rechargeGroup.children[0]);
+      rechargeData.length = 0;
+
       const isEfluente = regimeSelect.value === 'efluente';
-      const arrowColor = isEfluente ? 0x00ff88 : 0xffaa00;
+      
+      // CORES ATUALIZADAS AQUI
+      const arrowColor = isEfluente ? 0x474e53 : 0xb37700;
       const xPositions = [-8, -6, -4, -2, 2, 4, 6, 8];
 
       xPositions.forEach(x => {
@@ -220,9 +358,24 @@
 
         arrowData.push({ helper: arrowHelper, baseX: x, dir: dir, phase: Math.random() * Math.PI * 2 });
       });
+
+        const rechargeXPositions = [-9, -7, -5, 5, 7, 9];
+
+        rechargeXPositions.forEach(x => {
+         // Se estiver na esquerda (x < 0), inclina para a direita (+0.4)
+        // Se estiver na direita (x > 0), inclina para a esquerda (-0.4)
+        const dirX = x < 0 ? 0.4 : -0.4;
+        const rechargeDir = new THREE.Vector3(dirX, -1, 0).normalize();
+
+        const origin = new THREE.Vector3(x, 7.5, frontZ);
+        const rechargeArrow = new THREE.ArrowHelper(rechargeDir, origin, 1.4, 0x00d2ff, 0.5, 0.3);
+        rechargeGroup.add(rechargeArrow);
+
+        rechargeData.push({ helper: rechargeArrow, baseX: x, phase: Math.random() * Math.PI * 2 });
+         });
     }
 
-    // --- INTERFACE DE CONTROLE ---
+    // --- INTERFACE E ALTERAÇÃO DE ESTADO ---
     const regimeSelect = document.getElementById('regime-select');
     const waterSlider = document.getElementById('water-slider');
     const rainSlider = document.getElementById('rain-slider');
@@ -236,17 +389,30 @@
       if (isEfluente) {
         waterSlider.value = 85;
         rainSlider.value = 70;
+        
+        soilMat.map = null;
         soilMat.color.setHex(0x3a5a40);
-        statusTag.textContent = 'RIO EFLUENTE (Ganhador)';
+        alluviumMat.color.setHex(0xd97706);
+        
+        statusTag.textContent = 'RIO EFLUENTE (Cheia/Ganhador)';
         statusTag.className = 'status-badge efluente';
+        
+        populateVegetation('trees');
       } else {
         waterSlider.value = 20;
         rainSlider.value = 10;
-        soilMat.color.setHex(0xa16207);
-        statusTag.textContent = 'RIO INFLUENTE (Perdedor)';
+
+        soilMat.map = aridTexture;
+        soilMat.color.setHex(0xffffff);
+        alluviumMat.color.setHex(0xc2a649);
+
+        statusTag.textContent = 'RIO INFLUENTE (Estiagem/Perdedor)';
         statusTag.className = 'status-badge influente';
+
+        populateVegetation('cactus');
       }
 
+      soilMat.needsUpdate = true;
       buildArrows();
     }
 
@@ -278,57 +444,81 @@
       requestAnimationFrame(animate);
       time += 0.03;
 
+      const rainIntensity = parseFloat(rainSlider.value) / 100;
+
+      // 1. Recarga do Aquífero pela Chuva
+      if (rainIntensity > 0 && parseFloat(waterSlider.value) < 100) {
+        let currentVal = parseFloat(waterSlider.value);
+        currentVal += rainIntensity * 0.15;
+        if (currentVal > 100) currentVal = 100;
+        waterSlider.value = currentVal;
+        waterVal.textContent = `${(1.2 + (currentVal / 100) * 4.0).toFixed(1)} m`;
+      }
+
       const wVal = parseFloat(waterSlider.value);
       const isEfluente = regimeSelect.value === 'efluente';
 
-      // 1. Atualização do Aquífero 3D
+      // 2. Largura Dinâmica do Rio vs Planície de Inundação
+      const targetRiverWidth = isEfluente ? 6.0 : 1.2;
+      riverMesh.scale.x += (targetRiverWidth - riverMesh.scale.x) * 0.05;
+
+      // 3. Atualização do Aquífero 3D
       const targetY = 1.2 + (wVal / 100) * 4.0;
       waterMesh.position.y = targetY / 2 + 0.6;
       waterMesh.scale.y = targetY;
 
-      // 2. Atualização Dinâmica da Curva do Nível Freático (N.A.)
+      // 4. Atualização da Linha N.A. (Com Trava de Cota Topográfica)
       const positions = naLine.geometry.attributes.position.array;
       const riverLevel = 5.2;
 
       for (let i = 0; i < linePointsCount; i++) {
         const percent = i / (linePointsCount - 1);
         const x = -blockWidth / 2 + percent * blockWidth;
+        const terrainY = getTerrainHeight(x); // Altura máxima permitida do solo no ponto X
         
-        // Equação de caimento dinâmico da superfície piezométrica em direção ao rio
-        let y;
+        let calculatedY;
         if (isEfluente) {
-          // Curva convexa em direção ao rio (N.A. mais alto nas bordas)
-          y = riverLevel + (targetY - 1.2) * (1 - Math.exp(-Math.pow(x / 4.0, 2)));
+          calculatedY = riverLevel + (targetY - 1.2) * (1 - Math.exp(-Math.pow(x / 4.0, 2)));
         } else {
-          // Curva côncava (N.A. rebaixado nas bordas, se alimentando do rio)
-          y = targetY + (riverLevel - targetY) * Math.exp(-Math.pow(x / 2.5, 2));
+          calculatedY = targetY + (riverLevel - targetY) * Math.exp(-Math.pow(x / 2.5, 2));
         }
 
+        // LIMITE: Garante que a linha N.A. nunca exceda a topografia do terreno
+        const finalY = Math.min(calculatedY, terrainY);
+
         positions[i * 3] = x;
-        positions[i * 3 + 1] = y;
+        positions[i * 3 + 1] = finalY;
         positions[i * 3 + 2] = frontZ;
       }
       naLine.geometry.attributes.position.needsUpdate = true;
-      naLine.computeLineDistances(); // Atualiza os traços da linha tracejada
+      naLine.computeLineDistances();
 
-      // 3. Animação da Chuva
-      const rainIntensity = parseFloat(rainSlider.value) / 100;
+      // 5. Animação da Chuva
       rainSystem.visible = rainIntensity > 0;
       if (rainIntensity > 0) {
         const p = rainGeo.attributes.position.array;
         for (let i = 1; i < rainCount * 3; i += 3) {
-          p[i] -= 0.25 * (0.5 + rainIntensity);
-          if (p[i] < 1.2) p[i] = 10 + Math.random() * 5;
+          p[i] -= 0.35 * (0.5 + rainIntensity);
+          if (p[i] < 1.2) p[i] = 7 + Math.random() * 6;
         }
         rainGeo.attributes.position.needsUpdate = true;
       }
 
-      // 4. Animação das Setas
+      // 6. Animação das Setas Subterrâneas
       arrowData.forEach(item => {
         const currentY = isEfluente ? targetY * 0.75 : 4.8;
         const offset = Math.sin(time + item.phase) * 0.3;
         item.helper.position.set(item.baseX + item.dir.x * offset, currentY + item.dir.y * offset, frontZ);
       });
+
+      // 7. Animação das Setas Verticais de Recarga
+      rechargeGroup.visible = rainIntensity > 0;
+      if (rainIntensity > 0) {
+        rechargeData.forEach(item => {
+          const offsetY = Math.sin(time * 2 + item.phase) * 0.25;
+          item.helper.position.set(item.baseX, 7.5 + offsetY, frontZ);
+        });
+      }
 
       controls.update();
       renderer.render(scene, camera);
